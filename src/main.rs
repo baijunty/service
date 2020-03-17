@@ -1,47 +1,104 @@
+extern crate clap;
 #[macro_use]
 extern crate windows_service;
 
 use std::ffi::OsString;
+use std::thread;
 use std::time::Duration;
+
+use clap::{App, Arg, SubCommand};
 use windows_service::{
     service::{
-        ServiceAccess, ServiceAction, ServiceActionType, ServiceErrorControl,ServiceState,
-        ServiceFailureActions, ServiceFailureResetPeriod, ServiceInfo, ServiceStartType,
+        ServiceAccess, ServiceAction, ServiceActionType, ServiceErrorControl, ServiceFailureActions,
+        ServiceFailureResetPeriod, ServiceInfo, ServiceStartType, ServiceState,
         ServiceType,
     },
     service_manager::{ServiceManager, ServiceManagerAccess},
 };
-use std::thread;
-
-const SERVICE_NAME: &str = "PhoneProxy";
 
 #[cfg(windows)]
 fn main() -> windows_service::Result<()> {
-    let mut env =std::env::args();
-    let command= &*env.find(|s|{
-        (&*s).eq_ignore_ascii_case("i")||(&*s).eq_ignore_ascii_case("u")
-    }).expect("使用 i安装 或者 u卸载服务");
-    println!("{}",command);
+    let app = App::new("service manager")
+        .version("0.0.1")
+        .about("Windows 服务管理")
+        .author("baijunty@163.com")
+        .name("service")
+        .arg(Arg::with_name("config")
+            .short("c")
+            .long("config")
+            .required(true)
+            .default_value("install")
+            .help("install or uninstall a service")
+            .takes_value(true))
+        .arg(Arg::with_name("name")
+            .short("n")
+            .long("name")
+            .required(true)
+            .help("service name")
+            .takes_value(true))
+        .arg(Arg::with_name("desc")
+            .short("d")
+            .long("description")
+            .default_value("暂无描述")
+            .required(false)
+            .help("service description")
+            .takes_value(true))
+        .arg(Arg::with_name("exe")
+            .short("e")
+            .long("executor")
+            .required(false)
+            .help("executor path")
+            .takes_value(true))
+        .subcommand(SubCommand::with_name("config")
+            .arg(Arg::with_name("file")
+                .short("f")
+                .long("file")
+                .required(false)
+                .help("config an real process config file")
+                .takes_value(true))
+        )
+        .get_matches();
     let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
     let service_manager = ServiceManager::local_computer(None::<&str>, manager_access)?;
-    match command {
-        "i" =>{
-            create_service(&service_manager)?;
+    match (app.value_of("config"), app.value_of("name")) {
+        (Some("install"), Some(name)) => {
+            let service_binary_path = ::std::env::current_exe()
+                .unwrap()
+                .with_file_name("proxy.exe");
+            let desc = app.value_of("desc").expect("输入错误");
+            let mut args = vec![OsString::from(app.value_of("exe").expect(app.usage()))];
+            if let Some(sub) =  app.subcommand_matches("config") {
+                args.extend(sub.values_of("file").expect(app.usage()).map(|f|OsString::from(f)))
+            };
+            println!("debug {:?}",args);
+            let service_info = ServiceInfo {
+                name: OsString::from(name),
+                display_name: OsString::from(desc),
+                service_type: ServiceType::OWN_PROCESS,
+                start_type: ServiceStartType::AutoStart,
+                error_control: ServiceErrorControl::Normal,
+                executable_path: service_binary_path,
+                launch_arguments: args,
+                dependencies: vec![],
+                account_name: None, // run as System
+                account_password: None,
+            };
+            create_service(&service_manager, &service_info)?;
         },
-        "u" =>{
-            del_service(&service_manager)?;
+        (Some("uninstall"), Some(name)) => {
+            del_service(&service_manager, name)?;
         },
-        _=>unreachable!("バカな")
+        _ => panic!(app.usage().to_string())
     }
     Ok(())
 }
 
-fn del_service(service_manager:&ServiceManager) ->windows_service::Result<()> {
+fn del_service(service_manager: &ServiceManager, name: &str) -> windows_service::Result<()> {
     let service_access = ServiceAccess::QUERY_STATUS | ServiceAccess::STOP | ServiceAccess::DELETE;
-    let service = service_manager.open_service(SERVICE_NAME, service_access)?;
+    let service = service_manager.open_service(name, service_access)?;
     if let Ok(state) = service.query_status() {
-        println!("now state {:?}",state.current_state);
-        if state.current_state!= ServiceState::Stopped {
+        println!("now state {:?}", state.current_state);
+        if state.current_state != ServiceState::Stopped {
             service.stop()?;
             // Wait for service to stop
             thread::sleep(Duration::from_secs(5));
@@ -51,31 +108,15 @@ fn del_service(service_manager:&ServiceManager) ->windows_service::Result<()> {
     Ok(())
 }
 
-fn create_service(service_manager:&ServiceManager) ->windows_service::Result<()> {
-    let service_binary_path = ::std::env::current_exe()
-        .unwrap()
-        .with_file_name("proxy.exe");
-
-    let service_info = ServiceInfo {
-        name: OsString::from(SERVICE_NAME),
-        display_name: OsString::from("友家App热更新支持服务"),
-        service_type: ServiceType::OWN_PROCESS,
-        start_type: ServiceStartType::AutoStart,
-        error_control: ServiceErrorControl::Normal,
-        executable_path: service_binary_path,
-        launch_arguments: vec![],
-        dependencies: vec![],
-        account_name: None, // run as System
-        account_password: None,
-    };
+fn create_service(service_manager: &ServiceManager, service_info: &ServiceInfo) -> windows_service::Result<()> {
     let service_access = ServiceAccess::QUERY_CONFIG
         | ServiceAccess::STOP
         | ServiceAccess::CHANGE_CONFIG
         | ServiceAccess::START
         | ServiceAccess::DELETE;
     let service = service_manager
-        .create_service(&service_info, service_access)
-        .or(service_manager.open_service(SERVICE_NAME, service_access))?;
+        .create_service(service_info, service_access)
+        .or(service_manager.open_service(&service_info.name, service_access))?;
     let actions = vec![
         ServiceAction {
             action_type: ServiceActionType::Restart,
@@ -86,8 +127,6 @@ fn create_service(service_manager:&ServiceManager) ->windows_service::Result<()>
             delay: Duration::default(),
         },
     ];
-
-    println!("Update failure actions");
     let failure_actions = ServiceFailureActions {
         reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(86400 * 2)),
         reboot_msg: None,
@@ -95,19 +134,9 @@ fn create_service(service_manager:&ServiceManager) ->windows_service::Result<()>
         actions: Some(actions),
     };
     service.update_failure_actions(failure_actions)?;
-
-    println!("Query failure actions");
     let updated_failure_actions = service.get_failure_actions()?;
-
-    println!("Enable failure actions on non-crash failures");
     service.set_failure_actions_on_non_crash_failures(true)?;
-
-    println!("Query failure actions on non-crash failures enabled");
     let failure_actions_flag = service.get_failure_actions_on_non_crash_failures()?;
-    println!(
-        "Failure actions on non-crash failures enabled: {}",
-        failure_actions_flag
-    );
     Ok(())
 }
 

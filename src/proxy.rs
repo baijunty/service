@@ -1,11 +1,14 @@
 #[macro_use]
 extern crate windows_service;
 
+use std::cell::RefCell;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::process::{Command, Stdio, Child};
+use std::process::{Child, Command, Stdio};
+use std::rc::Rc;
 use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 use windows_service::{
@@ -17,14 +20,14 @@ use windows_service::{
     service_control_handler::{self, ServiceControlHandlerResult},
     service_dispatcher,
 };
-use std::sync::mpsc::Receiver;
-use std::rc::Rc;
-use std::cell::RefCell;
 
-const SERVICE_NAME: &str = "PhoneProxy";
+const SERVICE_NAME: &str = "exe_proxy";
 
 #[cfg(windows)]
 fn main() -> windows_service::Result<()> {
+    if std::env::args().len() < 2 {
+        panic!("args is empty")
+    }
     define_windows_service!(ffi_service_main, run);
     service_dispatcher::start(SERVICE_NAME, ffi_service_main)?;
     Ok(())
@@ -40,7 +43,6 @@ fn main() -> windows_service::Result<()> {
 
 fn run(args: Vec<OsString>) {
     if let Err(e) = run_service() {
-        println!("{:?}", e);
         panic!("error");
     }
 }
@@ -79,7 +81,12 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
         checkpoint: 0,
         wait_hint: Duration::default(),
     })?;
-    start_proxy(&shutdown_rx)?;
+    match start_child(&shutdown_rx) {
+        Ok(_) => {},
+        Err(e) => {
+            println!("run process err {:?}",e);
+        }
+    };
     // Tell the system that service has stopped.
     status_handle.set_service_status(ServiceStatus {
         service_type: SERVICE_TYPE,
@@ -93,41 +100,38 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn start_proxy(shutdown_rx:&Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
-    let current = std::env::current_exe()?;
-//    let config_file = current.with_file_name("config.json");
-    let mut child = Command::new(current.with_file_name("client.exe"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .args(vec!["-r", "104.198.93.253:7777", "-l", ":8802", "-mode", "fast2", "-key", "kasiwa120bai", "-crypt", "aes-192", "-sockbuf", "16777217", "-dscp", "46"]).spawn().expect("start failed");
-    let mut child2 = Command::new(current.with_file_name("client.exe"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .args(vec!["-r", "3.113.27.184:7777", "-l", ":8801", "-mode", "fast2", "-key", "kasiwa120bai", "-crypt", "aes-192", "-sockbuf", "16777217", "-dscp", "46"]).spawn().expect("start failed");
-    let mut child3 = Command::new(current.with_file_name("hotfix.exe"))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn().expect("start failed");
-    let dur=Duration::from_millis(500);
-    while let result =  shutdown_rx.recv_timeout(dur){
+fn start_child(shutdown_rx: &Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut args = std::env::args().skip(1);
+    let current=std::env::current_exe()?;
+    let process =current .with_file_name(OsString::from(args.next().unwrap()));
+    let mut command = Command::new(process);
+    let mut out=File::create(current.with_file_name("log.log"))?;
+    let mut err=File::create(current.with_file_name("err.log"))?;
+    command.stdin(Stdio::piped());
+    command.stdout(out);
+    command.stderr(err);
+    match args.next() {
+        Some(config) => {
+            let config = std::env::current_exe()?.with_file_name(OsString::from(config));
+            let mut content = String::new();
+            let mut file = File::open(config)?;
+            file.read_to_string(&mut content);
+            for arg in content.split(' ') {
+                command.arg(arg);
+            }
+        },
+        None => {}
+    }
+    let mut child = command.spawn()?;
+    let dur = Duration::from_millis(500);
+    while let result = shutdown_rx.recv_timeout(dur) {
         match result {
-            Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected)=>break,
-            _=>(),
+            Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            _ => {},
         }
     };
     child.kill()?;
-    child2.kill()?;
-    child3.kill()?;
     Ok(())
-}
-
-#[test]
-fn test_process() {
-    let (shutdown_tx, shutdown_rx) = mpsc::channel();
-    match start_proxy(&shutdown_rx) {
-        Ok(_) => {},
-        Err(e) => println!("{:?}", e.to_string())
-    }
 }
 
 #[cfg(not(windows))]

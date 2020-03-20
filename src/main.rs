@@ -43,16 +43,18 @@ fn main() -> windows_service::Result<()> {
             .required(false)
             .help("service description")
             .takes_value(true))
-        .arg(Arg::with_name("exe")
-            .short("e")
-            .long("executor")
-            .required(false)
-            .help("executor path")
-            .takes_value(true))
         .subcommand(SubCommand::with_name("config")
+            .arg(Arg::with_name("exe")
+                .short("e")
+                .long("executor")
+                .multiple(true)
+                .required(true)
+                .help("executor path")
+                .takes_value(true))
             .arg(Arg::with_name("file")
                 .short("f")
                 .long("file")
+                .multiple(true)
                 .required(false)
                 .help("config an real process config file")
                 .takes_value(true))
@@ -66,10 +68,13 @@ fn main() -> windows_service::Result<()> {
                 .unwrap()
                 .with_file_name("proxy.exe");
             let desc = app.value_of("desc").expect("输入错误");
-            let mut args = vec![OsString::from(app.value_of("exe").expect(app.usage()))];
-            if let Some(sub) =  app.subcommand_matches("config") {
-                args.extend(sub.values_of("file").expect(app.usage()).map(|f|OsString::from(f)))
-            };
+            let sub =  app.subcommand_matches("config").expect(app.usage()) ;
+            let mut args = vec![OsString::from("-e")];
+            args.extend(sub.values_of("exe").expect(app.usage()).map(|f|OsString::from(f)));
+            if let Some(fs) = sub.values_of("file") {
+                args.push(OsString::from("-f"));
+                args.extend(fs.map(|f|OsString::from(f)));
+            }
             println!("debug {:?}",args);
             let service_info = ServiceInfo {
                 name: OsString::from(name),

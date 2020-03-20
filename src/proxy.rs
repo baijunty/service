@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc;
@@ -20,14 +21,12 @@ use windows_service::{
     service_control_handler::{self, ServiceControlHandlerResult},
     service_dispatcher,
 };
+use clap::{App, Arg};
 
 const SERVICE_NAME: &str = "exe_proxy";
 
 #[cfg(windows)]
 fn main() -> windows_service::Result<()> {
-    if std::env::args().len() < 2 {
-        panic!("args is empty")
-    }
     define_windows_service!(ffi_service_main, run);
     service_dispatcher::start(SERVICE_NAME, ffi_service_main)?;
     Ok(())
@@ -84,7 +83,7 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
     match start_child(&shutdown_rx) {
         Ok(_) => {},
         Err(e) => {
-            println!("run process err {:?}",e);
+            println!("run process err {:?}", e);
         }
     };
     // Tell the system that service has stopped.
@@ -100,29 +99,55 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn get_path_from_name(input:&str) ->  Result<PathBuf, std::io::Error> {
+    let current = std::env::current_exe()?;
+    let path = Path::new(input);
+    let real_path=if path.exists() {
+        path.to_path_buf()
+    } else {
+        current.with_file_name(path.as_os_str())
+    };
+    Ok(real_path)
+}
+
 fn start_child(shutdown_rx: &Receiver<()>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut args = std::env::args().skip(1);
-    let current=std::env::current_exe()?;
-    let process =current .with_file_name(OsString::from(args.next().unwrap()));
-    let mut command = Command::new(process);
-    let mut out=File::create(current.with_file_name("log.log"))?;
-    let mut err=File::create(current.with_file_name("err.log"))?;
-    command.stdin(Stdio::piped());
-    command.stdout(out);
-    command.stderr(err);
-    match args.next() {
-        Some(config) => {
-            let config = std::env::current_exe()?.with_file_name(OsString::from(config));
+    let app = App::new("service manager")
+        .arg(Arg::with_name("exe")
+            .short("e")
+            .long("executor")
+            .multiple(true)
+            .required(true)
+            .help("executor path")
+            .takes_value(true))
+        .arg(Arg::with_name("file")
+            .short("f")
+            .long("file")
+            .multiple(true)
+            .required(false)
+            .help("config an real process config file")
+            .takes_value(true))
+        .get_matches();
+    let err=std::io::Error::new(std::io::ErrorKind::NotFound,"no arg found");
+    let exes=app.values_of("exe").ok_or(err)?;
+    let mut files =app.values_of("file").unwrap_or_default();
+    let mut process=vec![];
+    for exe in exes {
+        let exe_path=get_path_from_name(exe)?;
+        let mut command = Command::new(exe_path);
+        command.stdin(Stdio::piped());
+        command.stdout(Stdio::piped());
+        command.stderr(Stdio::piped());
+        if let Some(file) = files.next() {
+            let config=get_path_from_name(file)?;
             let mut content = String::new();
             let mut file = File::open(config)?;
             file.read_to_string(&mut content);
             for arg in content.split(' ') {
                 command.arg(arg);
             }
-        },
-        None => {}
+        }
+        process.push(command.spawn()?);
     }
-    let mut child = command.spawn()?;
     let dur = Duration::from_millis(500);
     while let result = shutdown_rx.recv_timeout(dur) {
         match result {
@@ -130,7 +155,9 @@ fn start_child(shutdown_rx: &Receiver<()>) -> Result<(), Box<dyn std::error::Err
             _ => {},
         }
     };
-    child.kill()?;
+    for mut process in process {
+        process.kill()?;
+    }
     Ok(())
 }
 

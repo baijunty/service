@@ -1,3 +1,3 @@
 # service
-#### run executors with service
+#### run executable files with service
 - see usage

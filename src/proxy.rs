@@ -142,7 +142,7 @@ fn start_child(shutdown_rx: &Receiver<()>) -> Result<(), Box<dyn std::error::Err
             let mut content = String::new();
             let mut file = File::open(config)?;
             file.read_to_string(&mut content);
-            for arg in content.split(' ') {
+            for arg in content.trim().split(' ') {
                 command.arg(arg);
             }
         }

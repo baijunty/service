@@ -126,17 +126,24 @@ fn start_child(shutdown_rx: &Receiver<()>) -> Result<(), Box<dyn std::error::Err
             .required(false)
             .help("config an real process config file")
             .takes_value(true))
+        .arg(Arg::with_name("log")
+            .short("l")
+            .long("log")
+            .multiple(true)
+            .required(false)
+            .help("config an log file")
+            .takes_value(true))
         .get_matches();
     let err=std::io::Error::new(std::io::ErrorKind::NotFound,"no arg found");
     let exes=app.values_of("exe").ok_or(err)?;
     let mut files =app.values_of("file").unwrap_or_default();
+    let mut logs =app.values_of("log").unwrap_or_default();
     let mut process=vec![];
     for exe in exes {
         let exe_path=get_path_from_name(exe)?;
         let mut command = Command::new(exe_path);
         command.stdin(Stdio::piped());
         command.stdout(Stdio::piped());
-        command.stderr(Stdio::piped());
         if let Some(file) = files.next() {
             let config=get_path_from_name(file)?;
             let mut content = String::new();
@@ -145,6 +152,11 @@ fn start_child(shutdown_rx: &Receiver<()>) -> Result<(), Box<dyn std::error::Err
             for arg in content.trim().split(' ') {
                 command.arg(arg);
             }
+        }
+        if let Some(file) = logs.next() {
+            let config=get_path_from_name(file)?;
+            let mut f=OpenOptions::new().write(true).create(true).append(true).truncate(false).open(config)?;
+            command.stderr(f);
         }
         process.push(command.spawn()?);
     }

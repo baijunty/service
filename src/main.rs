@@ -58,6 +58,13 @@ fn main() -> windows_service::Result<()> {
                 .required(false)
                 .help("config an real process config file")
                 .takes_value(true))
+            .arg(Arg::with_name("log")
+                .short("l")
+                .long("log")
+                .multiple(true)
+                .required(false)
+                .help("config an log file")
+                .takes_value(true))
         )
         .get_matches();
     let manager_access = ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE;
@@ -73,6 +80,10 @@ fn main() -> windows_service::Result<()> {
             args.extend(sub.values_of("exe").expect(app.usage()).map(|f|OsString::from(f)));
             if let Some(fs) = sub.values_of("file") {
                 args.push(OsString::from("-f"));
+                args.extend(fs.map(|f|OsString::from(f)));
+            }
+            if let Some(fs) = sub.values_of("log") {
+                args.push(OsString::from("-l"));
                 args.extend(fs.map(|f|OsString::from(f)));
             }
             println!("debug {:?}",args);

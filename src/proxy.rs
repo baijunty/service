@@ -83,7 +83,8 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
     match start_child(&shutdown_rx) {
         Ok(_) => {},
         Err(e) => {
-            println!("run process err {:?}", e);
+            let mut f=File::create("server.log").unwrap();
+            f.write_all(format!("run process err {:?}",e).as_bytes());
         }
     };
     // Tell the system that service has stopped.
@@ -102,7 +103,7 @@ fn run_service() -> Result<(), Box<dyn std::error::Error>> {
 fn get_path_from_name(input:&str) ->  Result<PathBuf, std::io::Error> {
     let current = std::env::current_exe()?;
     let path = Path::new(input);
-    let real_path=if path.exists() {
+    let real_path=if path.exists()||path.extension().is_none() {
         path.to_path_buf()
     } else {
         current.with_file_name(path.as_os_str())
@@ -142,8 +143,6 @@ fn start_child(shutdown_rx: &Receiver<()>) -> Result<(), Box<dyn std::error::Err
     for exe in exes {
         let exe_path=get_path_from_name(exe)?;
         let mut command = Command::new(exe_path);
-        command.stdin(Stdio::piped());
-        command.stdout(Stdio::piped());
         if let Some(file) = files.next() {
             let config=get_path_from_name(file)?;
             let mut content = String::new();
@@ -155,8 +154,9 @@ fn start_child(shutdown_rx: &Receiver<()>) -> Result<(), Box<dyn std::error::Err
         }
         if let Some(file) = logs.next() {
             let config=get_path_from_name(file)?;
-            let mut f=OpenOptions::new().write(true).create(true).append(true).truncate(false).open(config)?;
-            command.stderr(f);
+            command.stderr(OpenOptions::new().write(true).create(true).append(true).truncate(false).open(&config)?);
+            command.stdin(OpenOptions::new().write(true).create(true).append(true).truncate(false).open(&config)?);
+            command.stdout(OpenOptions::new().write(true).create(true).append(true).truncate(false).open(&config)?);
         }
         process.push(command.spawn()?);
     }

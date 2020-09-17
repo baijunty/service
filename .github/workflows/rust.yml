@@ -23,7 +23,5 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        path: ${{ github.workspace }}/target/release/*
-        name: install.exe,proxy.exe
-        asset_content_type: application/vnd.microsoft.portable-executable
+        path: ${{ github.workspace }}/target/release/*.exe
+        name: package.zip
